@@ -1,0 +1,5 @@
+# Only the installer is copied; the source checkout is mounted at runtime.
+**
+!.github/
+!.github/files/
+!.github/files/install-bolt.sh

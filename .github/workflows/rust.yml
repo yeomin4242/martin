@@ -3,6 +3,10 @@ name: Rust CI
 on:
   workflow_call:
     inputs:
+      optimization:
+        description: 'Opt-in optimization for native Linux GNU base release artifacts: none, pgo or pgo-bolt.'
+        type: string
+        default: none
       run-heavy:
         description: >-
           Run the jobs that only re-prove the Linux lane's coverage on another
@@ -16,6 +20,11 @@ on:
         default: true
   workflow_dispatch:
     inputs:
+      optimization:
+        description: Optimization for native Linux GNU base release artifacts
+        type: choice
+        options: [none, pgo, pgo-bolt]
+        default: none
       run-heavy:
         description: Run the Windows/macOS builds and the publish dry-run
         type: boolean
@@ -435,7 +444,10 @@ jobs:
           sbom: true
           context: .
           file: .github/files/multi-platform.Dockerfile
-          build-args: EXTRA_PACKAGES=${{ matrix.extra_packages }}
+          # Native PGO builds may link the system FreeType library.
+          build-args: >-
+            EXTRA_PACKAGES=${{ matrix.extra_packages }}
+            ${{ matrix.variant == 'base' && inputs.optimization != 'none' && inputs.optimization != '' && 'libfreetype6' || '' }}
           push: false
           load: true
           tags: ${{ github.repository }}:linux${{ matrix.suffix }}
@@ -496,7 +508,9 @@ jobs:
           sbom: true
           context: .
           file: .github/files/multi-platform.Dockerfile
-          build-args: EXTRA_PACKAGES=${{ matrix.extra_packages }}
+          build-args: >-
+            EXTRA_PACKAGES=${{ matrix.extra_packages }}
+            ${{ matrix.variant == 'base' && inputs.optimization != 'none' && inputs.optimization != '' && 'libfreetype6' || '' }}
           push: true
           load: false
           tags: ${{ steps.docker_meta.outputs.tags }}
@@ -544,6 +558,7 @@ jobs:
       target: x86_64-unknown-linux-gnu
       os: ubuntu-latest
       release_mode: ${{ github.event_name != 'pull_request' }}
+      optimization: ${{ github.event_name != 'pull_request' && inputs.optimization || 'none' }}
 
   build-aarch64-unknown-linux-gnu:
     if: inputs.run-release-builds
@@ -552,6 +567,8 @@ jobs:
       target: aarch64-unknown-linux-gnu
       os: ubuntu-24.04-arm
       release_mode: ${{ github.event_name != 'pull_request' }}
+      # BOLT cannot retain Cortex-A53 erratum veneers. General ARM releases use PGO.
+      optimization: ${{ github.event_name != 'pull_request' && inputs.optimization != 'none' && inputs.optimization != '' && 'pgo' || 'none' }}
 
   # `-full` builds (adds rendering) for the `-full` image and Linux-gnu tarballs.
   build-x86_64-unknown-linux-gnu-full:

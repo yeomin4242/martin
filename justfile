@@ -82,6 +82,26 @@ bench-http requests='10m' pg_requests='500k':  (cargo-install 'oha')
 bench-server: fetch start prepare-mbtiles
     RUSTFLAGS="$RUSTFLAGS {{bench_rustflags}}" cargo run --release -- tests/fixtures/mbtiles tests/fixtures/pmtiles tests/fixtures/geojson {{quote(DATABASE_URL)}}
 
+# Compare release, PGO and optionally PGO+BOLT on the native host.
+# Needs cargo-pgo 0.3.0, llvm-tools-preview and oha; BOLT also needs Linux/LLVM BOLT.
+bench-pgo optimization='pgo' output='target/pgo-benchmark' *args:
+    python3 tests/bench/pgo.py build --optimization {{quote(optimization)}} --output {{quote(output)}} --compare {{args}}
+
+# Build an optimized Martin artifact for the existing Docker packaging path.
+# Only native Linux GNU builds are supported; mbtiles keeps its normal release build.
+build-release-pgo target optimization='pgo': fetch
+    #!/usr/bin/env bash
+    set -euo pipefail
+    [[ '{{target}}' == *-unknown-linux-gnu ]] || { echo 'PGO release packaging requires Linux GNU' >&2; exit 1; }
+    [[ '{{optimization}}' != 'pgo-bolt' || '{{target}}' == x86_64-* ]] || { echo 'General ARM releases support PGO only; BOLT cannot preserve Cortex-A53 veneers' >&2; exit 1; }
+    [[ '{{release_mode}}' == '1' ]] || { echo 'PGO requires release mode' >&2; exit 1; }
+    export CARGO_TARGET_{{shoutysnakecase(target)}}_RUSTFLAGS='-C strip=symbols {{if target =~ '^x86_64' {x86_cpu_flag} else {''} }}'
+    cargo build --release --target {{target}} --package mbtiles --locked
+    # cargo-pgo appends to RUSTFLAGS. The experiment overrides strip=symbols
+    # while profiling and only strips its final artifact after BOLT is done.
+    python3 tests/bench/pgo.py build --target {{target}} --optimization {{quote(optimization)}} --output target/pgo-release {{if env('LEGACY_CPU', '') != '' {'--legacy-cpu'} else {''} }}
+    cp target/pgo-release/martin target/{{target}}/release/martin
+
 # Build martin with hotpath profiling support (pass e.g. `--features hotpath-cloud`)
 build-hotpath *args: fetch
     RUSTFLAGS="$RUSTFLAGS --cfg tokio_unstable {{bench_rustflags}}" cargo build --release --features hotpath {{args}}

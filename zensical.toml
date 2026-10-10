@@ -121,7 +121,8 @@ nav = [
     {"Getting involved" = "getting-involved.md"},
     {"Provided Tools" = "tools.md"},
     {"Martin as a library" = "martin-as-a-library.md"},
-    {"Architecture" = "architecture.md"}
+    {"Architecture" = "architecture.md"},
+    {"Profile-guided optimization" = "development/pgo.md"}
   ]},
   {"Migration Guide" = "migration-guide.md"},
   {"Changelog" = "changelog.md"}
@@ -477,6 +478,7 @@ Development = [
   { "tools.md" = "Tools provided alongside the Martin server" },
   { "martin-as-a-library.md" = "Embedding martin-core in a Rust application" },
   { "architecture.md" = "Martin's components and design decisions" },
+  { "development/pgo.md" = "Profiling, benchmarking and packaging PGO/BOLT binaries" },
 ]
 Optional = [
   { "migration-guide.md" = "Migrating between major versions" },
