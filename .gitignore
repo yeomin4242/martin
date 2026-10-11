@@ -7,7 +7,6 @@
 **/*.rs.bk
 **/dist/
 **/node_modules/
-**/__pycache__/
 *.mbtiles
 *.profraw
 .claude

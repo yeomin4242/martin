@@ -1,8 +1,0 @@
-{
-  "base_commit": "c63cfce5380f6140dd77bc4768ddad987b495afe",
-  "patch_sha256": "bfa3e489598f3ff724a517af32fbfabb0f6020c68603ea934b5b4fec3af3388b",
-  "files": {
-    "justfile": "46110b1e0f52385df9e61ec866841848745ee20dbf1d4f201d2286991d0424c2",
-    ".github/workflows/build-binary.yml": "0f5348b38d0de34417a4a2b9881e3701f52aacd372ce6b57f94ce3d99d8a9c36"
-  }
-}

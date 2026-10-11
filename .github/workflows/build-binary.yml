@@ -31,11 +31,10 @@ on:
         required: false
         type: boolean
         default: true
-      optimization:
-        description: 'none, pgo or pgo-bolt. Native Linux GNU base release builds only.'
-        required: false
-        type: string
-        default: none
+      pgo:
+        description: 'Apply PGO (and BOLT on x86) to the Docker binaries.'
+        type: boolean
+        default: false
 
 defaults:
   run:
@@ -45,7 +44,7 @@ jobs:
   build:
     name: Build ${{ inputs.target }}
     runs-on: ${{ inputs.os }}
-    timeout-minutes: ${{ inputs.optimization != 'none' && 180 || 90 }}
+    timeout-minutes: ${{ inputs.pgo && 180 || 90 }}
     permissions:
       contents: read
     env:
@@ -55,9 +54,8 @@ jobs:
       LEGACY_CPU: ${{ inputs.legacy_cpu && '1' || '' }}
     services:
       postgres:
-        # Upstream postgis/postgis has no ARM image. Use its multiarch rebuild
-        # for native ARM profiling, rather than profiling under QEMU.
-        image: ${{ inputs.optimization != 'none' && endsWith(inputs.target, '-unknown-linux-gnu') && 'ghcr.io/baosystems/postgis:18-3.6@sha256:8784f86b3e0e046859c96ea25eb8b10f0b801fd891b99a82b82f28ac4a643db8' || '' }}
+        # Multiarch PostGIS for native x86 and ARM profiling.
+        image: ${{ inputs.pgo && 'ghcr.io/baosystems/postgis:18-3.6@sha256:8784f86b3e0e046859c96ea25eb8b10f0b801fd891b99a82b82f28ac4a643db8' || '' }}
         env:
           POSTGRES_DB: test
           POSTGRES_USER: postgres
@@ -82,50 +80,32 @@ jobs:
         with: { version: '0.15.1', use-cache: false }
       - name: Rust Versions
         run: rustc --version && cargo --version
-      - name: Validate optimization configuration
-        env:
-          OPTIMIZATION: ${{ inputs.optimization }}
-          TARGET: ${{ inputs.target }}
-          SUPPORTED: ${{ runner.os == 'Linux' && !inputs.musl && !inputs.full && inputs.release_mode && endsWith(inputs.target, '-unknown-linux-gnu') }}
-        run: |
-          case "$OPTIMIZATION" in
-            none) ;;
-            pgo|pgo-bolt) test "$SUPPORTED" = true ;;
-            *) echo "Unsupported optimization: $OPTIMIZATION" >&2; exit 1 ;;
-          esac
-          if [[ "$OPTIMIZATION" == pgo-bolt && "$TARGET" != x86_64-* ]]; then
-            echo 'General ARM releases support PGO only: BOLT cannot preserve Cortex-A53 veneers' >&2
-            exit 1
-          fi
-      - name: Free disk space for profiling builds
-        if: inputs.optimization != 'none'
-        uses: BRAINSia/free-disk-space@7048ffbf50819342ac964ef3998a51c2564a8a75 # v2.1.3
-        with:
-          tool-cache: false
-          mandb: true
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: false
-          docker-images: false
-          swap-storage: true
       - name: Install PGO tooling
-        if: inputs.optimization != 'none'
+        if: inputs.pgo
         uses: taiki-e/install-action@f7e5d7c961414b23f5b25b2da9294395d08513ad # v2.87.26
         with: { tool: oha@1.16.0 }
       - name: Install cargo-pgo and LLVM tooling
-        if: inputs.optimization != 'none'
+        if: inputs.pgo
         env:
-          OPTIMIZATION: ${{ inputs.optimization }}
+          TARGET: ${{ inputs.target }}
         run: |
           rustup component add llvm-tools-preview
           cargo install cargo-pgo --version 0.3.0 --locked
-          if [[ "$OPTIMIZATION" == pgo-bolt ]]; then
-            llvm_major=$(rustc -vV | sed -nE 's/^LLVM version: ([0-9]+).*/\1/p')
-            sudo bash .github/files/install-bolt.sh "$llvm_major"
+          sudo apt-get update
+          sudo apt-get install -y sqlite3 postgresql-client
+          if [[ "$TARGET" == x86_64-unknown-linux-gnu ]]; then
+            llvm_major=$(rustc -vV | sed -n 's/^LLVM version: \([0-9]*\).*/\1/p')
+            source /etc/os-release
+            curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /usr/share/keyrings/llvm.asc > /dev/null
+            echo "deb [signed-by=/usr/share/keyrings/llvm.asc] https://apt.llvm.org/$VERSION_CODENAME/ llvm-toolchain-$VERSION_CODENAME-$llvm_major main" | sudo tee /etc/apt/sources.list.d/llvm.list
+            sudo apt-get update
+            sudo apt-get install -y "bolt-$llvm_major"
+            sudo ln -s "/usr/bin/llvm-bolt-$llvm_major" /usr/local/bin/llvm-bolt
+            sudo ln -s "/usr/bin/merge-fdata-$llvm_major" /usr/local/bin/merge-fdata
+            sudo ln -s "/usr/lib/llvm-$llvm_major/lib/libbolt_rt_instr.a" /usr/local/lib/libbolt_rt_instr.a
           fi
       - name: Initialize profiling database
-        if: inputs.optimization != 'none'
+        if: inputs.pgo
         env:
           PGDATABASE: test
           PGUSER: postgres
@@ -141,17 +121,11 @@ jobs:
         run: just install-dependencies
 
       - name: Build ${{ inputs.target }}
-        if: ${{ !inputs.musl && !inputs.full && inputs.optimization == 'none' }}
+        if: ${{ !inputs.musl && !inputs.full }}
         env:
           TARGET: ${{ inputs.target }}
-        run: just build-release "$TARGET"
-      - name: Build optimized ${{ inputs.target }}
-        if: inputs.optimization != 'none'
-        env:
-          TARGET: ${{ inputs.target }}
-          OPTIMIZATION: ${{ inputs.optimization }}
-          PGO_DATABASE_URL: postgres://postgres:postgres@localhost:${{ job.services.postgres.ports['5432'] }}/test
-        run: just build-release-pgo "$TARGET" "$OPTIMIZATION"
+          DATABASE_URL: postgres://postgres:postgres@localhost:${{ job.services.postgres.ports['5432'] }}/test
+        run: just build-release "$TARGET" "${{ inputs.pgo }}"
       - name: Build ${{ inputs.target }} (full)
         if: ${{ inputs.full }}
         env:
@@ -163,6 +137,7 @@ jobs:
           TARGET: ${{ inputs.target }}
         run: just build-release-musl "$TARGET"
       - name: Move ${{ inputs.target }} artefacts to the target_releases directory
+        if: ${{ !inputs.pgo }}
         env:
           TARGET: ${{ inputs.target }}
         run: just move-artifacts "$TARGET"
