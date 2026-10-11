@@ -44,7 +44,9 @@ jobs:
           cargo pgo --version
           sqlite3 --version
           psql --version
-          rustup component list --installed | grep llvm-tools-preview
+          llvm_profdata="$(rustc --print sysroot)/lib/rustlib/$TARGET/bin/llvm-profdata"
+          test -x "$llvm_profdata"
+          "$llvm_profdata" --version
           if [[ "$TARGET" == x86_64-unknown-linux-gnu ]]; then
             llvm_major=$(rustc -vV | sed -n 's/^LLVM version: \([0-9]*\).*/\1/p')
             test "$(readlink /usr/local/bin/llvm-bolt)" = "/usr/bin/llvm-bolt-$llvm_major"
