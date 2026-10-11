@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 
 ROOT = Path.cwd()
-OUT = ROOT / 'target/ci-rerun'
+OUT = ROOT / 'target/ci-final'
 OUT.mkdir(parents=True, exist_ok=True)
 
 
@@ -19,8 +19,12 @@ def step(name):
     start = lines.index('      - name: ' + name)
     end = next((i for i in range(start + 1, len(lines)) if lines[i].startswith('      - ')), len(lines))
     block = lines[start:end]
-    run = block.index('        run: |')
-    return '\n'.join(line[10:] for line in block[run + 1:]) + '\n'
+    for index, line in enumerate(block):
+        if line == '        run: |':
+            return '\n'.join(line[10:] for line in block[index + 1:]) + '\n'
+        if line.startswith('        run: '):
+            return line[len('        run: '):] + '\n'
+    raise AssertionError('Missing run block: ' + name)
 
 
 def execute(label, command):
@@ -41,18 +45,35 @@ def execute(label, command):
 
 
 phase = sys.argv[1]
+snapshot = json.loads(Path(os.environ['RUNNER_TEMP'], 'ci-final-snapshot.json').read_text())
 if phase == 'prepare':
-    for label, name in [('install', 'Install cargo-pgo and LLVM tooling'), ('optimized', 'Build optimized ${{ inputs.target }}')]:
-        (OUT / (label + '.sh')).write_text(step(name))
+    patch_path = Path(os.environ['RUNNER_TEMP'], 'ci-final-worktree.patch')
+    assert hashlib.sha256(patch_path.read_bytes()).hexdigest() == snapshot['patch_sha256']
+    subprocess.run(['git', 'apply', '--check', str(patch_path)], check=True)
+    subprocess.run(['git', 'apply', str(patch_path)], check=True)
+for path, expected in snapshot['files'].items():
+    assert hashlib.sha256((ROOT / path).read_bytes()).hexdigest() == expected, path
+if phase == 'prepare':
+    for label, name in [('install', 'Install cargo-pgo and LLVM tooling'), ('optimized', 'Build ${{ inputs.target }}')]:
+        raw = step(name)
+        (OUT / (label + '-source.sh')).write_text(raw)
+        rendered = raw.replace('${{ inputs.pgo }}', 'true')
+        assert '${{' not in rendered
+        (OUT / (label + '.sh')).write_text(rendered)
+    shutil.copy2(patch_path, OUT / 'worktree.patch')
+    shutil.copy2(Path(os.environ['RUNNER_TEMP'], 'ci-final-snapshot.json'), OUT / 'snapshot.json')
+    shutil.copy2(ROOT / 'justfile', OUT / 'snapshot-justfile')
+    shutil.copy2(ROOT / '.github/workflows/build-binary.yml', OUT / 'snapshot-build-binary.yml')
     (OUT / 'baseline.sh').write_text('set -euo pipefail\njust build-release "$TARGET"\n')
     sha = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
     assert sha == os.environ['SOURCE_SHA'], (sha, os.environ['SOURCE_SHA'])
     (OUT / 'metadata.json').write_text(json.dumps({
-        'commit': sha, 'target': os.environ['TARGET'],
+        'commit': sha, 'worktree_snapshot': snapshot, 'target': os.environ['TARGET'],
         'optimization': 'pgo-bolt' if os.environ['TARGET'].startswith('x86_64') else 'pgo',
         'rustc': subprocess.check_output(['rustc', '-vV'], text=True),
         'baseline_cpu': 'x86-64-v3' if os.environ['TARGET'].startswith('x86_64') else 'default',
         'compiler_flags': 'baseline strip=symbols; optimized strip=none then strip shipped copies; same CPU level',
+        'source_step_sha256': {name: hashlib.sha256((OUT / (name + '-source.sh')).read_bytes()).hexdigest() for name in ['install', 'optimized']},
         'step_sha256': {name: hashlib.sha256((OUT / (name + '.sh')).read_bytes()).hexdigest() for name in ['install', 'optimized']},
         'seconds': 10, 'repeats': 5, 'workers': 2, 'connections': 32,
     }, indent=2))

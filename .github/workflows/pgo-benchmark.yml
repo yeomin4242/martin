@@ -22,7 +22,7 @@ jobs:
       RELEASE_MODE: '1'
       LEGACY_CPU: ''
       CARGO_BUILD_JOBS: '4'
-      CARGO_TARGET_DIR: target/ci-rerun/build
+      CARGO_TARGET_DIR: target/ci-final/build
     services:
       postgres:
         image: ghcr.io/baosystems/postgis:18-3.6@sha256:8784f86b3e0e046859c96ea25eb8b10f0b801fd891b99a82b82f28ac4a643db8
@@ -41,6 +41,8 @@ jobs:
         run: |
           cp .github/files/ci-pgo-rerun.py "$RUNNER_TEMP/ci-pgo-rerun.py"
           cp .github/files/ci-pgo-measure.py "$RUNNER_TEMP/ci-measure.py"
+          cp .github/files/ci-final-worktree.patch "$RUNNER_TEMP/ci-final-worktree.patch"
+          cp .github/files/ci-final-snapshot.json "$RUNNER_TEMP/ci-final-snapshot.json"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ env.SOURCE_SHA }}
@@ -60,13 +62,13 @@ jobs:
         uses: taiki-e/install-action@f7e5d7c961414b23f5b25b2da9294395d08513ad
         with: { tool: 'just@1.58.0,oha@1.16.0' }
       - run: rustup update stable && rustup default stable
-      - name: Record host and extract unchanged CI steps
+      - name: Apply final worktree snapshot and extract CI steps
         env:
           DATABASE_URL: postgres://postgres:postgres@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/test
         run: |
           echo "DATABASE_URL=$DATABASE_URL" >> "$GITHUB_ENV"
           python3 "$RUNNER_TEMP/ci-pgo-rerun.py" prepare
-          { lscpu; free -h; uname -a; } > target/ci-rerun/host.txt
+          { lscpu; free -h; uname -a; } > target/ci-final/host.txt
       - name: Install tooling using the PR CI step
         run: python3 "$RUNNER_TEMP/ci-pgo-rerun.py" install
       - name: Initialize profiling database
@@ -79,7 +81,7 @@ jobs:
         run: tests/fixtures/initdb.sh
       - name: Build normal release baseline
         run: python3 "$RUNNER_TEMP/ci-pgo-rerun.py" baseline
-      - name: Execute the PR optimized CI step unchanged
+      - name: Execute final build-release PGO recipe
         run: python3 "$RUNNER_TEMP/ci-pgo-rerun.py" optimized
       - name: Compare shipped binaries with five alternating repetitions
         run: python3 "$RUNNER_TEMP/ci-pgo-rerun.py" measure
@@ -87,14 +89,17 @@ jobs:
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
-          name: ci-rerun-${{ matrix.target }}
+          name: ci-final-${{ matrix.target }}
           path: |
-            target/ci-rerun/*.json
-            target/ci-rerun/*.txt
-            target/ci-rerun/*.sh
-            target/ci-rerun/*.log
-            target/ci-rerun/benchmark/
-            target/ci-rerun/baseline/martin
-            target/ci-rerun/optimized/martin
-            target/ci-rerun/build/pgo-training.log
+            target/ci-final/*.json
+            target/ci-final/*.txt
+            target/ci-final/*.sh
+            target/ci-final/*.patch
+            target/ci-final/snapshot-justfile
+            target/ci-final/snapshot-build-binary.yml
+            target/ci-final/*.log
+            target/ci-final/benchmark/
+            target/ci-final/baseline/martin
+            target/ci-final/optimized/martin
+            target/ci-final/build/pgo-training.log
           retention-days: 7
